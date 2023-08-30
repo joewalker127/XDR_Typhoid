@@ -1,0 +1,1509 @@
+---
+title: "XDR Typhoid Analysis"
+author: "Jo Walker"
+date: "8/30/2023"
+output: html_document
+---
+
+
+```{r, echo=FALSE, message=FALSE, warning = F}
+knitr::opts_chunk$set(echo = F)
+
+library(MASS)
+library(colorspace)
+library(RColorBrewer)
+library(tidyverse)
+library(countrycode)
+library(knitr)
+library(DT)
+library(readxl)
+library(plotly)
+library(maps)
+library(ggalluvial)
+library(gridExtra)
+
+AirportInfo <- read.csv("~/XDR_Typhoid/Air Travel Data/AirportInfo.csv")
+
+Airports_2010 <- read.csv("~/XDR_Typhoid/Air Travel Data/Airports_2010.csv") %>% 
+  select(NodeName, CountryCode)
+
+AirportInfo = left_join(AirportInfo, Airports_2010) %>%
+  mutate(Country = countrycode(CountryCode,origin="iso2c",destination="country.name"),
+         Country = ifelse(CountryCode=="NA"|is.na(CountryCode),"Namibia",Country),
+         Country = 
+           ifelse(Country == "Hong Kong SAR China",
+                  "Hong Kong",
+                  Country)
+         )
+
+Passenger.Data = read.csv("~/XDR_Typhoid/Air Travel Data/prediction.csv") %>%
+  left_join(AirportInfo,
+            by=c("Origin" = "NodeName")) %>% 
+  left_join(AirportInfo,
+            by=c("Destination" = "NodeName"),
+            suffix=c(".Origin",".Destination")) %>% 
+  select(Origin, Destination, stops,PredMu,Name.Origin, City.Origin, Country.Origin,
+         Name.Destination, City.Destination, Country.Destination)
+
+PakistanToWorld_2010_2019 =  read.csv("~/XDR_Typhoid/Air Travel Data/PakistanToWorld_2010_2019.csv") %>% 
+  mutate(destCtryName = as.character(destCtryName),
+         destCtryName = ifelse(destCtryName=="Bosnia-Herzegovina","Bosnia & Herzegovina",destCtryName),
+         destCtryName = ifelse(destCtryName %in% c("Virgin Islands (US)", "North Mariana Isl"),"United States",destCtryName),
+         destCtryName = ifelse(destCtryName=="Svalbard","Norway",destCtryName),
+         destCtryName = ifelse(destCtryName=="Faroe Islands","Denmark",destCtryName),
+         destCtryName = ifelse(destCtryName=="St Vincent-Grenad","St. Vincent and the Grenadines",destCtryName),
+         destCtryName = ifelse(destCtryName=="St Kitts-Nevis","St. Kitts and Nevis",destCtryName),
+         destCtryName = ifelse(destCtryName=="Timor-leste","Timor-Leste",destCtryName),
+         destCtryName = ifelse(destCtryName %in% c("Réunion","Mayotte","Reunion","Guadeloupe","Martinique", "St Barthelemy","French Guiana","French Polynesia"),"France",destCtryName),
+         destCtryName = ifelse(destCtryName %in% c("Jersey","Virgin Islands (GB)","Guernsey","Gibraltar","Turks-Caicos","Anguilla"),"United Kingdom",destCtryName),
+         destCtryName = ifelse(destCtryName %in% c("St Maarten (Dutch Part)","Bonaire, Saint Eustatius and Saba"),"Netherlands",destCtryName),
+         destCtryName = ifelse(destCtryName=="Sao Tome-Principe","Sao Tome and Principe",destCtryName),
+         destCtryName = ifelse(destCtryName=="Brunei Darussalam","Brunei",destCtryName),
+         destCtryName = ifelse(destCtryName=="Central African Rep","Central African Republic",destCtryName),
+         destCtryName = ifelse(destCtryName=="Congo (Brazzaville)","Congo - Brazzaville",destCtryName),
+         destCtryName = ifelse(destCtryName=="Congo (Kinshasa)","Congo - Kinshasa",destCtryName),
+         destCtryName = ifelse(destCtryName=="Cote D'Ivoire","Côte d’Ivoire",destCtryName),
+         destCtryName = ifelse(destCtryName=="Czech Republic","Czechia",destCtryName),
+         destCtryName = ifelse(destCtryName=="Dominican Rep","Dominican Republic",destCtryName),
+         destCtryName = ifelse(destCtryName=="Swaziland","Eswatini",destCtryName),
+         destCtryName = ifelse(destCtryName=="Hong Kong (SAR)","Hong Kong",destCtryName),
+         destCtryName = ifelse(destCtryName=="Macao (SAR)","Macao SAR China",destCtryName),
+         destCtryName = ifelse(destCtryName=="Myanmar","Myanmar (Burma)",destCtryName),
+         destCtryName = ifelse(destCtryName=="Korea (North)","North Korea",destCtryName),
+         destCtryName = ifelse(destCtryName=="Macedonia","North Macedonia",destCtryName),
+         destCtryName = ifelse(destCtryName=="Korea (South)","South Korea",destCtryName),
+         destCtryName = ifelse(destCtryName=="Viet Nam","Vietnam",destCtryName)
+         ) 
+
+PakistanToWorld_2010_2019_Annual = 
+  PakistanToWorld_2010_2019 %>% 
+  rename(Country.Destination = destCtryName,
+         IATA_Volume = totalVol) %>% 
+  group_by(Country.Destination, year) %>%
+  summarize(IATA_Volume = sum(IATA_Volume)) %>%
+  ungroup() %>% 
+  right_join(
+    expand.grid(Country.Destination =
+             unique(c(PakistanToWorld_2010_2019$destCtryName)),
+             year = unique(PakistanToWorld_2010_2019$year)),
+    by = c("Country.Destination","year")
+  ) %>%
+  filter(Country.Destination!="Pakistan") %>%
+  mutate(IATA_Volume = 
+           ifelse(is.na(IATA_Volume),0,IATA_Volume))
+
+PakistanToWorld_2010_2019_Annual_Wide = 
+  PakistanToWorld_2010_2019_Annual %>%
+  pivot_wider(id_cols = "Country.Destination",
+              names_from = "year",
+              values_from = "IATA_Volume",
+              names_prefix = "IATA_Volume")
+
+PakistanToWorld_AllYears = 
+  PakistanToWorld_2010_2019 %>% 
+  rename(Country.Destination = destCtryName,
+         IATA_Volume = totalVol) %>% 
+  group_by(Country.Destination) %>%
+  summarize(IATA_Volume_AllYears = sum(IATA_Volume)) %>%
+  ungroup() %>% 
+  mutate(Mean.IATA_Volume_AllYears = 
+           IATA_Volume_AllYears/length(unique(PakistanToWorld_2010_2019$year)))
+
+# pakistan, non-Sindh/Punjab provinces 
+
+non.sindh.punjab.dest.airport <- Passenger.Data %>%
+  filter(Country.Origin =="Pakistan",
+         !City.Origin %in% c("Karachi","Hyderabad","Sukkur","Nawabshah", #Sindh
+   "Bahawalpur", "Lahore","Faisalabad","Multan","Sialkot", # punjab
+   "Dera Ghazi Khan","Lahore","Rahim Yar Khan"
+  )) %>%
+  group_by(Destination,Name.Destination,City.Destination,Country.Destination) %>% 
+  summarize(Total.Flow = sum(PredMu)) %>% 
+  ungroup() %>% 
+  arrange(desc(Total.Flow))
+
+
+non.sindh.punjab.dest.city = 
+  non.sindh.punjab.dest.airport %>%
+    group_by(City.Destination,Country.Destination) %>% 
+    summarize(Total.Flow = sum(Total.Flow)) %>% 
+    ungroup() %>% 
+    arrange(desc(Total.Flow))
+  
+non.sindh.punjab.dest.country = 
+    non.sindh.punjab.dest.city %>%
+    group_by(Country.Destination) %>% 
+    summarize(Total.Flow = sum(Total.Flow)) %>% 
+    ungroup() %>% 
+    arrange(desc(Total.Flow))
+
+# Sindh and Punjab provinces, Pakistan
+
+sindh.punjab.dest.airport <- Passenger.Data %>% 
+  filter(Country.Origin =="Pakistan", 
+         City.Origin %in% c("Karachi","Hyderabad","Sukkur","Nawabshah"#,
+  #"Bahawalpur", 
+  #"Lahore","Faisalabad","Multan","Sialkot",
+  #"Dera Ghazi Khan","Rahim Yar Khan"
+  )
+  ) %>%
+  group_by(Destination,Name.Destination,City.Destination,Country.Destination) %>%
+  summarize(Total.Flow = sum(PredMu)) %>% 
+  ungroup() %>% 
+  arrange(desc(Total.Flow)) %>% 
+  left_join(non.sindh.punjab.dest.airport,
+            by=c("Destination","Name.Destination",
+                 "City.Destination","Country.Destination"),
+            suffix=c(".sindh", ".pakistan")) %>%
+  mutate(Total.Flow.pakistan = 
+           ifelse(is.na(Total.Flow.pakistan),
+           0,
+           Total.Flow.pakistan))
+
+sindh.punjab.dest.city =
+  sindh.punjab.dest.airport %>%
+    group_by(City.Destination,Country.Destination) %>%
+    summarize(Total.Flow.sindh = sum(Total.Flow.sindh),
+              Total.Flow.pakistan = sum(Total.Flow.pakistan)) %>%
+    ungroup() %>%
+    arrange(desc(Total.Flow.sindh))
+
+sindh.punjab.dest.country =
+    sindh.punjab.dest.city %>%
+    group_by(Country.Destination) %>%
+    summarize(Total.Flow.sindh = sum(Total.Flow.sindh),
+              Total.Flow.pakistan = sum(Total.Flow.pakistan)) %>%
+    ungroup() %>%
+    arrange(desc(Total.Flow.sindh)) %>% 
+  mutate(Total.Flow.sindh.decile =
+           cut(Total.Flow.sindh,quantile(Total.Flow.sindh,
+                                         seq(0,1,0.1)),
+               include.lowest=T,labels = 1:10)
+           )
+
+
+
+
+### Pakistan overall
+
+Pakistan.dest.airport <- Passenger.Data %>% 
+  filter(Country.Origin =="Pakistan") %>%
+  group_by(Destination,Name.Destination,City.Destination,Country.Destination) %>%
+  summarize(Total.Flow = sum(PredMu)) %>% 
+  ungroup() %>% 
+  arrange(desc(Total.Flow)) 
+
+
+Pakistan.dest.city =
+  Pakistan.dest.airport %>%
+    group_by(City.Destination,Country.Destination) %>%
+    summarize(Total.Flow = sum(Total.Flow)) %>%
+    ungroup() %>%
+    arrange(desc(Total.Flow))
+
+Pakistan.dest.country =
+    Pakistan.dest.city %>%
+    mutate(
+      Country.Destination = ifelse(Country.Destination %in% c("Réunion","Mayotte","Reunion","Guadeloupe","Martinique", "St Barthelemy","French Guiana"),"France",Country.Destination),
+      Country.Destination = ifelse(Country.Destination=="São Tomé & Príncipe","Sao Tome and Principe",Country.Destination)
+      ) %>% 
+    group_by(Country.Destination) %>%
+    summarize(Total.Flow = sum(Total.Flow)) %>%
+    ungroup() %>%
+    arrange(desc(Total.Flow)) %>% 
+  mutate(Total.Flow.decile =
+           cut(Total.Flow,quantile(Total.Flow,
+                                         seq(0,1,0.1)),
+               include.lowest=T,labels = 1:10)
+           ) %>% 
+  full_join(PakistanToWorld_2010_2019_Annual_Wide,by = "Country.Destination") %>% 
+  mutate(Total.Flow = ifelse(is.na(Total.Flow),0,Total.Flow),
+         Diff.IATA.Model.2010 = IATA_Volume2010 - Total.Flow,
+         Diff.IATA.Model.2018 = IATA_Volume2018 - Total.Flow,
+         Diff.IATA.Model.2019 = IATA_Volume2019 - Total.Flow,
+         MeanIATA_Volume2018_2019 =
+           (IATA_Volume2018+IATA_Volume2019)/2) %>% left_join(PakistanToWorld_AllYears,by = "Country.Destination")
+
+```
+
+```{r,echo=F}
+ 
+WorldBank <- read.csv("~/XDR_Typhoid/Country Data/WorldBankIncomeGroup.csv") %>%
+  mutate(Country = as.character(Country),
+         Income.group = as.character(Income.group),
+    Country = ifelse(Country == "Hong Kong SAR, China","Hong Kong",Country),
+         Country = ifelse(Country == "Russian Federation","Russia",Country),
+    Country = ifelse(Country == "São Tomé & Príncipe","Sao Tome and Principe",Country),
+          Country = ifelse(Country == "Gambia, The","Gambia",Country),
+    Country = ifelse(Country == "Micronesia, Fed. Sts.","Micronesia",Country),
+    Country = ifelse(Country == "Antigua and Barbuda","Antigua-Barbuda",Country),
+    Country = ifelse(Country == "St. Lucia","St Lucia",Country),
+         Country = ifelse(Country == "Iran, Islamic Rep.","Iran",Country),
+         Country = ifelse(Country == "Egypt, Arab Rep.","Egypt",Country),
+         Country = ifelse(Country == "Yemen, Rep.","Yemen",Country),
+         Country = ifelse(Country == "Korea, Rep.","South Korea",Country),
+         Country = ifelse(Country == "Brunei Darussalam","Brunei",Country),
+         Country = ifelse(Country == "Syrian Arab Republic","Syria",Country),
+         Country = ifelse(Country == "Kyrgyz Republic","Kyrgyzstan",Country),
+         Country = ifelse(Country == "Lao PDR","Laos",Country),
+         Country = ifelse(Country == "Myanmar","Myanmar (Burma)",Country),
+    Country = ifelse(Country == "Trinidad and Tobago","Trinidad-Tobago",Country),
+         Country = ifelse(Country == "Slovak Republic","Slovakia",Country),
+         Country = ifelse(Country == "Congo, Dem. Rep.","Congo - Kinshasa",Country),
+         Country = ifelse(Country == "Congo, Rep.","Congo - Brazzaville" ,Country),
+         Country = ifelse(Country == "Czech Republic","Czechia",Country),
+         Country = ifelse(Country == "Bosnia and Herzegovina","Bosnia & Herzegovina",Country),
+         Country = ifelse(Country == "Cabo Verde","Cape Verde",Country),
+         Country = ifelse(Country == "Cote d'Ivoire","Côte d’Ivoire",Country),
+         Country = ifelse(Country == "Macao SAR, China","Macao SAR China",Country),
+         Country = ifelse(Country == "Venezuela, RB","Venezuela",Country),
+         Country = ifelse(Country == "Korea, Dem. Rep.","North Korea",Country),
+         Country = ifelse(Country == "Bahamas, The","Bahamas",Country),
+         Income.group = ifelse(Country=="Venezuela", "Upper middle income", Income.group)
+         ) %>%
+  rename(Country.Destination = Country) %>%
+  select(Country.Destination,
+         Income.group,
+         Region) %>% 
+  rbind(data.frame(Country.Destination = 
+                     c("Taiwan","Cook Islands"), 
+                   Income.group = 
+                     c("High income","Upper middle income"),
+                   Region = 
+                     c("East Asia & Pacific", "East Asia & Pacific"))) %>% arrange(Country.Destination)
+```
+
+```{r, echo=F, warning = F}
+burden = read.csv("~/XDR_Typhoid/Country Data/TyphoidBurden.csv",
+                   col_names =           c("Country","Code","IHME","Antillon","Mogasale", "Kim","Median.Inc","Median.Inc.Group")) %>%
+  mutate(Country.Destination = ifelse(Code=="0", Country,
+           countrycode(Code,origin="iso3c",
+         destination="country.name")),
+         Country.Destination =
+           ifelse(Country.Destination=="St. Lucia",
+                          "St Lucia",Country.Destination),
+         Country.Destination =
+           ifelse(Country.Destination=="São Tomé & Príncipe",
+                          "Sao Tome and Principe",Country.Destination),
+         Country.Destination =
+           ifelse(Country.Destination=="Micronesia (Federated States of)","Micronesia",Country.Destination),
+         Median.Inc.Group = 
+           ifelse(Median.Inc.Group=="V. High",
+                  "Very High",
+                  Median.Inc.Group)) %>%
+  select(Country.Destination,Median.Inc,Median.Inc.Group) %>%
+  mutate(Median.Inc.Group = as.character(Median.Inc.Group),
+         Median.Inc.Group = ifelse(Median.Inc >= 500, "Very High","Low"),
+         Median.Inc.Group = ifelse(Median.Inc < 500 & Median.Inc >= 100, "High",Median.Inc.Group),
+         Median.Inc.Group = ifelse(Median.Inc < 100 & Median.Inc >= 30, "Medium",Median.Inc.Group)
+         )
+```
+
+# Air Travel from Pakistan and Estimated Typhoid Burden by Country
+
+```{r,echo=F, warning=FALSE,message=FALSE, fig.width=8, fig.height= 6.2}
+
+pal = c("None" = "black","Low"="darkblue","Medium"="purple","High"="orange","Very High"="red")
+
+
+par(mgp = c(3,0.6,0),
+    mar = c(5,4,2,4.2))
+
+d = 
+ PakistanToWorld_2010_2019_Annual_Wide %>%  
+  select(Country.Destination,
+         IATA_Volume2019) %>%
+    full_join(burden, by = "Country.Destination") %>%
+    filter(Country.Destination !="Pakistan") %>% 
+  mutate(IATA_Volume2019 =
+           ifelse(is.na(IATA_Volume2019),0,IATA_Volume2019),
+    Median.Inc =
+      ifelse(is.na(Median.Inc),0,Median.Inc),
+    Median.Inc.Group =
+      ifelse(Median.Inc==0,"None",Median.Inc.Group),
+         Median.Inc.Group = 
+           factor(Median.Inc.Group, 
+                  levels = c("Very High","High","Medium","Low","None")),
+         log.Total.Flow = log10(IATA_Volume2019)) %>%
+  left_join(data.frame(Median.Inc.Group = names(pal), pal), by = "Median.Inc.Group") %>%
+  arrange(desc(IATA_Volume2019)) %>%
+  left_join(WorldBank, by = "Country.Destination")
+  
+d %>%
+  select(IATA_Volume2019, Median.Inc) %>%
+  mutate(IATA_Volume2019 = 
+           ifelse(IATA_Volume2019==0, 
+                  1,IATA_Volume2019),
+         IATA_Volume2019 = log10(IATA_Volume2019)) %>% 
+  plot(pch = 16,
+       col = as.character(d$pal),
+       xlab = "Log10 Air Travelers from Pakistan (2019)",
+       ylab = "Median Estimated Typhoid Incidence per 100,000 PY",
+       xlim = c(0,6.4),
+       ylim = c(5,790),
+       las = 1,
+    #   main = "Typhoid Incidence vs Travel Flow from Pakistan, by Country",
+       font = 2,
+       font.lab = 2)
+
+mtext(text = paste0(c("Very Low","Low","Medium","High","Very\nHigh"),"\nBurden"),
+      side = 4,
+      at = c(-20,
+             45, 
+             106,
+             335,
+             640),
+      las = 1,
+      line = 0.5,
+      font = 2,
+      col = c("black",pal[2:length(pal)]))
+
+
+# segments(x0 = filter(d, Country.Destination=="Saudi Arabia")$log.Total.Flow-0.3,
+#          x1 = filter(d, Country.Destination=="Saudi Arabia")$log.Total.Flow,
+#        y0 = 50, 
+#        y1 = filter(d, Country.Destination=="Saudi Arabia")$Median.Inc)
+# 
+# text(x = filter(d, Country.Destination=="Saudi Arabia")$log.Total.Flow-0.25,
+#      y = 50,
+#      labels = "Saudi Arabia",
+#      pos = 2)
+
+Countries.Text = c("Afghanistan",   
+          "Bangladesh",
+          "Philippines",
+          "Sri Lanka",
+          "Kenya",
+          "Uganda",
+          "India",
+          "Malaysia",
+          "Indonesia",
+          "Thailand")
+
+text(x = filter(arrange(d,Country.Destination),
+                Country.Destination %in%
+         Countries.Text)$log.Total.Flow+0.035,
+     y = filter(arrange(d,Country.Destination),
+                Country.Destination %in%
+                  Countries.Text)$Median.Inc + c(0,0,0,-25,25,-25,0,0,25,30),
+     labels = sort(Countries.Text),
+     pos = 4, 
+     col = as.character(d$pal[match(Countries.Text,d$Country.Destination)]))
+
+segments(x0 = filter(arrange(d,Country.Destination),
+                Country.Destination %in%
+         Countries.Text)$log.Total.Flow,
+         y0 = 
+           filter(arrange(d,Country.Destination),
+                Country.Destination %in%
+         Countries.Text)$Median.Inc,
+         x1 = filter(arrange(d,Country.Destination),
+                Country.Destination %in%
+         Countries.Text)$log.Total.Flow+0.11,
+         y1 = 
+           filter(arrange(d,Country.Destination), Country.Destination %in%
+                  Countries.Text)$Median.Inc + c(0,0,0,-20,20,-20,0,0,20,25),
+         col = as.character(d$pal[match(Countries.Text,d$Country.Destination)]))
+
+text(x = c(0.7, 2), 
+     y = c(300, 710),
+     pos = 3,
+     labels = c("Risk of Local\nTransmission\nif Introduced", 
+                "Risk of Introduction"),
+     font = 2)
+
+arrows(x0 = c(0.7, 0.7, 1, 3),
+       x1 = c(0.7, 0.7, 0.5, 3.5),
+       y0 = c(300, 450, 740, 740),
+       y1 = c(150, 600, 740, 740),
+       lwd = 2)
+
+# quantile(d$IATA_Volume2019, c(0.5,0.6,0.7,0.75,0.8,0.85,0.9))
+# log10(quantile(d$IATA_Volume2019, c(0.5,0.6,0.7,0.75,0.8,0.85,0.9)))
+
+```
+
+# Most Popular Destinations of International Flights from Pakistan
+
+Among the 20 countries (roughly the top decile) that received the greatest number of air passengers from Pakistan in 2019, 2 are estimated to have a high burden of typhoid (Malaysia and Thailand), 1 has a medium typhoid burden (Iran), and 5 have a low but non-zero burden (China, Turkey, Iraq, Azerbaijan, and Egypt): ongoing typhoid transmission is not believed to occur in the remaining 12 countries. Nine the top 20 countries (and 4 of the top 5) have reported XDR typhoid cases among travelers from Pakistan, while China experienced a limited XDR typhoid outbreak in early 2022.
+
+**Countries Receiving the Most Air Passengers from Pakistan in 2019**
+
+```{r,fig.width=8,fig.height=7}
+
+cols = pal[match(as.character(d$Median.Inc.Group), names(pal))]
+
+d %>% 
+  select(Country.Destination,
+         IATA_Volume2019,
+         Median.Inc,
+         Median.Inc.Group) %>%
+  mutate(Median.Inc.Group =
+           as.character(Median.Inc.Group),
+         Median.Inc = round(Median.Inc,1),
+         Median.Inc = paste0(Median.Inc," (",Median.Inc.Group,")"),
+         
+         Travel.Volume.Percentile = 
+           round(100*(n() - order(-IATA_Volume2019))/n(),1),
+         IATA_Volume2019 =
+           format(IATA_Volume2019,big.mark=","),
+         IATA_Volume2019 = 
+          paste0(IATA_Volume2019, 
+              " (",Travel.Volume.Percentile, ")"),
+         `Known XDR Typhoid Importations` = 
+           ifelse(Country.Destination %in% c("United Arab Emirates",
+                                 "United Kingdom",
+                                 "United States",
+                                 "Oman", "Canada",
+                                 "Qatar", "Italy",
+                                 "Spain", "Australia",
+                                 "Norway","India",
+                                 "Hong Kong"),
+                  "Travel Case(s)", "No"),
+         `Known XDR Typhoid Importations` = 
+           ifelse(Country.Destination == "China",
+                  "Local Outbreak", 
+                  `Known XDR Typhoid Importations`)
+         ) %>%
+  select(- Travel.Volume.Percentile,
+         - Median.Inc.Group) %>% 
+  rename("Country" = Country.Destination,
+         "Air Travelers from Pakistan, 2019 (Percentile)" = IATA_Volume2019,
+         "Estimated Annual Typhoid Incidence per 100k" = Median.Inc) %>%
+  head(20) %>% 
+  kable()
+
+```
+
+**High and Very High Typhoid Burden Countries Receiving the Most Air Passengers from Pakistan in 2019**
+
+```{r,fig.width=8,fig.height=7}
+
+cols = pal[match(as.character(d$Median.Inc.Group), names(pal))]
+
+d %>% 
+  select(Country.Destination,
+         IATA_Volume2019,
+         Median.Inc,
+         Median.Inc.Group) %>%
+  mutate(Median.Inc.Group =
+           as.character(Median.Inc.Group),
+         Median.Inc = round(Median.Inc,1),
+         Median.Inc = paste0(Median.Inc," (",Median.Inc.Group,")"),
+         
+         Travel.Volume.Percentile = 
+           round(100*(n() - order(-IATA_Volume2019))/n(),1),
+         IATA_Volume2019 =
+           format(IATA_Volume2019,big.mark=","),
+         IATA_Volume2019 = 
+          paste0(IATA_Volume2019, 
+              " (",Travel.Volume.Percentile, ")"),
+         `Known XDR Typhoid Importations` = 
+           ifelse(Country.Destination %in% c("United Arab Emirates",
+                                 "United Kingdom",
+                                 "United States",
+                                 "Oman", "Canada",
+                                 "Qatar", "Italy",
+                                 "Spain", "Australia",
+                                 "Norway","Ireland",
+                                 "China","Denmark",
+                                 "India","Taiwan"),
+                  "Travel Case(s)", "No"),
+        `Known XDR Typhoid Importations` = 
+          ifelse(Country.Destination == "India",
+                 "1 case diagnosed in the UK following travel from India in 2019",
+                 `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` = 
+           ifelse(Country.Destination == "China",
+                  "Local Outbreak", 
+                  `Known XDR Typhoid Importations`)
+         ) %>%
+  filter(Median.Inc.Group %in% c("High", "Very High")) %>%
+  select(- Travel.Volume.Percentile,
+         - Median.Inc.Group) %>% 
+  rename("Country" = Country.Destination,
+         "Air Travelers from Pakistan, 2019 (Percentile)" = IATA_Volume2019,
+         "Estimated Annual Typhoid Incidence per 100k" = Median.Inc) %>%
+  head(15) %>% 
+  kable(row.names = 1:15)
+
+```
+
+# Countries that Have Received XDR Typhoid Importations
+
+```{r}
+countries.w.imported.XDR = 
+    d %>% 
+    arrange(desc(IATA_Volume2019)) %>% 
+    filter(Country.Destination %in% 
+             c("United States",
+                             "United Kingdom",
+                             "Ireland",
+                             "Taiwan",
+                             "China",
+                             "India",
+                             "Qatar",
+                             "United Arab Emirates",
+                             "Oman",
+                             "Denmark",
+                             "Canada",
+                             "Italy",
+                             "Spain",
+                             "Australia",
+                             "Norway",
+               "Hong Kong")) %>% 
+    select(Country.Destination) %>%
+    unlist()
+
+d %>%
+  arrange(desc(IATA_Volume2019)) %>%
+  select(Country.Destination,
+         IATA_Volume2019,
+         Median.Inc,
+         Median.Inc.Group) %>%
+  mutate(Median.Inc.Group =
+           as.character(Median.Inc.Group),
+         Median.Inc = round(Median.Inc,1),
+         Median.Inc = paste0(Median.Inc," (",Median.Inc.Group,")"),
+
+         Travel.Volume.Percentile =
+           round(100*(n() - order(-IATA_Volume2019))/n(),1),
+         IATA_Volume2019 =
+           format(IATA_Volume2019,big.mark=","),
+         IATA_Volume2019 =
+          paste0(IATA_Volume2019,
+              " (",Travel.Volume.Percentile, ")"),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination %in% c(
+                                 "United States",
+                                 "Canada","Italy",
+                                 "Spain", "Australia",
+                                 "Ireland","Norway"),
+                  "Travel Case(s)", "No"),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "China",
+                  "Local outbreak",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "India",
+                  "1 case diagnosed in the UK following travel from India in 2019",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "United Kingdom",
+                  "64 cases diagnosed following travel from Pakistan as of March 2020",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "United Arab Emirates",
+                  "1 case diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Oman",
+                  "3 cases diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Taiwan",
+                  "1 case diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+                 `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Qatar",
+                  "1 case diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "United States",
+                  "67 cases diagnosed following travel from Pakistan as of March 2021",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Canada",
+                  "10 cases diagnosed following travel from Pakistan as of March 2021",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Italy",
+                  "1 case diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Spain",
+                  "1 case diagnosed following travel from Pakistan in 2018",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Australia",
+                  "3 cases diagnosed following travel from Pakistan in 2019 and 2020",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Denmark",
+                  "1 case diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+         `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Norway",
+                  "1 case diagnosed following travel from Pakistan in 2019",
+                  `Known XDR Typhoid Importations`),
+                  `Known XDR Typhoid Importations` =
+           ifelse(Country.Destination == "Ireland",
+                  "3 cases diagnosed following travel from Pakistan as of October 2019",
+                  `Known XDR Typhoid Importations`)
+         ) %>%
+  select(- Travel.Volume.Percentile,
+         - Median.Inc.Group) %>%
+  rename("Country" = Country.Destination,
+         "Air Travelers from Pakistan, 2019 (Percentile)" = IATA_Volume2019,
+         "Estimated Annual Typhoid Incidence per 100k" = Median.Inc) %>%
+  filter(Country %in% countries.w.imported.XDR) %>%
+    kable()
+
+
+
+```
+
+## All Countries
+
+```{r,fig.height=10,fig.width=8.5,eval= T}
+
+d = d  %>% arrange(desc(IATA_Volume2019)) 
+
+  par(mgp = c(3,0.75,0),
+      #mfrow=c(2,1),
+      mar = c(4,4,1,0))
+
+COLS = brewer.pal(5,"Dark2")[2:3]
+
+layout(matrix(c(1,1,2,2),nrow=2,ncol=2, byrow = T),
+       heights = c(1.5,1), widths = c(1,1),respect = TRUE)
+
+
+
+   p = barplot(height = ifelse(d$IATA_Volume2019==0,0,
+                                log10(d$IATA_Volume2019)),
+          col = ifelse(d$Country.Destination %in%
+                           countries.w.imported.XDR,
+                         COLS[1],
+                         COLS[2]),
+          las = 1,
+          xlab = "Country Rank",
+          ylab = "Air Travelers from Pakistan (2019)",
+          axes = F,
+          ylim = c(-0.2,7.75),
+          xlim = c(0,290),
+          font.lab = 2)
+
+  axis(side = 1, 
+       at = p[c(1,seq(20,180,20),nrow(d)),1],
+       labels = c(1,seq(20,180,20),nrow(d)),
+       font = 2)
+  
+  axis(side = 2, at = 0:6,
+       labels = paste0("10^",0:6),
+       las=1,
+       line = -0.5,
+       font = 2)
+ 
+#   legend(#"top",
+#          x = 0, y = 7.65 + 0.05,
+#          title = "Known to Have Imported XDR Typhoid?",
+#          legend = c("Yes", "No"),
+#          fill = c(COLS),
+#          horiz = T,
+#          bty = "n",
+#          xjust = 0)
+
+
+  text(x = 145-3,
+       y = seq(7+3*.2, 3.8, length.out = 19),
+       labels = c("Saudi Arabia",countries.w.imported.XDR[1:6],"Turkey",countries.w.imported.XDR[7],"Malaysia",countries.w.imported.XDR[8:16]),
+       col = c(COLS[2],rep(COLS[1],6),COLS[2],COLS[1],COLS[2],rep(COLS[1],9)) %>% darken(0.15),
+       adj = 0, pos = 4
+      )
+
+
+
+  segments(x0 = p[which(d$Country.Destination %in% c(countries.w.imported.XDR,"Saudi Arabia","Turkey","Malaysia")),1],
+           x1 = 145-3,
+           y0 = seq(7+3*0.2, 3.8, length.out = 19),
+           col = c(COLS[2],rep(COLS[1],6),COLS[2],COLS[1],COLS[2],rep(COLS[1],9)) %>% darken(0.15)
+           )
+
+  segments(x0 = p[which(d$Country.Destination %in% c(countries.w.imported.XDR,"Saudi Arabia","Turkey","Malaysia")),1],
+           y0 = log10(d$IATA_Volume2019[which(d$Country.Destination %in% c(countries.w.imported.XDR,"Saudi Arabia","Turkey","Malaysia"))]),
+           y1 = seq(7+3*0.2, 3.8, length.out = 19),
+           col = c(COLS[2],rep(COLS[1],6),COLS[2],COLS[1],COLS[2],rep(COLS[1],9)) %>% darken(0.15)
+  )
+  
+  # segments(x0 = p[which(!d$Country.Destination %in% countries.w.imported.XDR)[1],1],
+  #          x1 = 145-3,
+  #          y0 = 7.21,
+  #          col = COLS[2])
+   
+   mtext("A:",
+         side = 2, 
+         las =1, 
+         at = 7, 
+         font = 2,
+         cex = 1.8)
+
+  b=boxplot(log10(IATA_Volume2019) ~ Imported.XDR,
+          data = d %>%
+            mutate(Imported.XDR =
+                     ifelse(Country.Destination %in% countries.w.imported.XDR,
+                            "Yes","No"),
+                   Imported.XDR =
+                     factor(Imported.XDR,
+                            levels = c("Yes", "No")),
+                   IATA_Volume2019 =
+                     ifelse(IATA_Volume2019==0,1,
+                                IATA_Volume2019)),
+          las = 1,
+          #xlab = "Known to Have Imported XDR Typhoid",
+          #ylab = "Air Travelers from Pakistan (2019)",
+          col = COLS,
+          #ylim = c(-0.2,7.75),
+          add = T,
+          at = c(262,285),
+          axes = F,
+          boxwex = 10)
+  
+  axis(side = 1,
+       at = c(262,285),
+       labels = c("Yes","No"),
+       font = 2)
+
+   mtext("Known to Have\nImported XDR Typhoid?",
+         at = 273.5,
+         side = 1,
+         line = 3,
+         cex = 0.8,
+         font = 2)
+
+par(mar = c(0,0,0,0))
+
+map('world',
+    fill=T,
+    col = COLS[2],
+    add = F,
+    ylim = c(-55,100)
+    #xlim = c(-185,180)
+    )
+
+map('world',
+    regions="Pakistan",
+    fill=T,
+    col = "darkgreen",
+    add=T)
+
+   mtext("B:",
+         side = 2, 
+         las =1, 
+         at = 80, 
+         font = 2,
+         cex = 1.8)
+
+ regions.w.imported.XDR =
+   countries.w.imported.XDR
+ 
+ regions.w.imported.XDR[which(regions.w.imported.XDR=="United Kingdom")] = "UK"
+ 
+ regions.w.imported.XDR[which(regions.w.imported.XDR=="United States")] = "US"
+ 
+# world_map = map_data("world")
+
+    map("world", regions = regions.w.imported.XDR,
+       fill=T, col = COLS[1], add = T)
+  
+   legend(#"bottom",
+         x = -180, y = 105,
+         title = "Known to Have Imported XDR Typhoid?",
+         legend = c("Yes", "No",
+                    "Pakistan"),
+         fill = c(COLS, "Darkgreen","grey"),
+         horiz = T,
+         bty = "n",
+         xjust = 0)
+
+ # d %>% 
+ #   filter(Country.Destination %in% countries.w.imported.XDR, IATA_Volume2019>0) %>% 
+ #   select(IATA_Volume2019) %>%
+ #   summary()
+ # 
+ #  d %>% 
+ #   filter(!Country.Destination %in% countries.w.imported.XDR, IATA_Volume2019>0) %>% 
+ #   select(IATA_Volume2019) %>%
+ #   summary()
+  
+
+```
+
+## High-Income Countries
+
+```{r,fig.height=10,fig.width=8.5,eval= T}
+
+HighIncomeCountries =
+  WorldBank %>%
+  filter(Income.group == "High income") %>%
+  select(Country.Destination) %>%
+  unlist()
+
+#HighIncomeCountries = c(HighIncomeCountries, "Taiwan")
+
+  par(mgp = c(3,0.75,0),
+      #mfrow=c(2,1),
+      mar = c(4,4,1,0))
+
+d.highincome = d %>% 
+  filter(Country.Destination %in% HighIncomeCountries) %>% 
+  arrange(desc(IATA_Volume2019))
+
+COLS = brewer.pal(5,"Dark2")[2:3]
+
+layout(matrix(c(1,1,2,2),nrow=2,ncol=2, byrow = T),
+       heights = c(1.5,1), widths = c(1,1),respect = TRUE)
+
+countries.w.imported.XDR = 
+    d.highincome %>% 
+    arrange(desc(IATA_Volume2019)) %>% 
+    filter(Country.Destination %in% 
+             c("United States",
+                             "United Kingdom",
+                             "Ireland",
+                             "Taiwan",
+                             "China",
+                             "India",
+                             "Qatar",
+                             "United Arab Emirates",
+                             "Oman",
+                             "Denmark",
+                             "Canada",
+                             "Italy",
+                             "Spain",
+                             "Australia",
+               "Norway","Hong Kong")) %>% 
+    select(Country.Destination) %>%
+    unlist()
+
+
+   p = barplot(height =
+                 ifelse(d.highincome$IATA_Volume2019==0,0,                     log10(d.highincome$IATA_Volume2019)),
+           
+          col = ifelse(d.highincome$Country.Destination %in%
+                           countries.w.imported.XDR,
+                         COLS[1],
+                         COLS[2]),
+          las = 1,
+          xlab = "Country Rank",
+          ylab = "Air Passengers from Pakistan (2019)",
+          axes = F,
+          ylim = c(-0.2,7.75),
+          xlim = c(0,120),
+          font.lab = 2)
+
+  axis(side = 1,
+       at = p[c(1,10,seq(20,60,10),nrow(d.highincome)),1],
+       labels = c(1,10,seq(20,60,10),nrow(d.highincome)),
+       font = 2)
+
+  axis(side = 2, at = 0:6,
+       labels = paste0("10^",0:6),
+       las=1,
+       line = -0.5,
+       font = 2)
+
+  legend(#"top",
+         x = 0, y = 7.65 + 0.06,
+         title = "Known to Have Imported XDR Typhoid? (HIC's Only)",
+         legend = c("Yes", "No"),
+         fill = c(COLS, "Darkgreen","grey"),
+         horiz = T,
+         bty = "n",
+         xjust = 0)
+
+
+  text(x = 60,
+       y = seq(7, 3.9,
+               length.out = length(countries.w.imported.XDR)),
+       labels = countries.w.imported.XDR,
+       col = COLS[1],
+       adj = 0
+      )
+
+
+
+  segments(x0 = p[which(d.highincome$Country.Destination %in% countries.w.imported.XDR),1],
+           x1 = 60-1,
+           y0 = seq(7, 3.9, length.out =
+                      length(countries.w.imported.XDR)),
+           col = COLS[1])
+
+  segments(x0 = p[which(d.highincome$Country.Destination %in% countries.w.imported.XDR),1],
+           y0 = log10(d.highincome$IATA_Volume2019[which(d.highincome$Country.Destination %in% countries.w.imported.XDR)]),
+           y1 = seq(7, 3.9, 
+                    length.out = length(countries.w.imported.XDR)),
+           col = COLS[1]
+           )
+   
+   mtext("A:",
+         side = 2,
+         las =1,
+         at = 7,
+         font = 2,
+         cex = 1.8)
+
+  b=boxplot(log10(IATA_Volume2019) ~ Imported.XDR,
+          data = d.highincome %>%
+            mutate(Imported.XDR =
+                     ifelse(Country.Destination %in% countries.w.imported.XDR,
+                            "Yes","No"),
+                   Imported.XDR =
+                     factor(Imported.XDR,
+                            levels = c("Yes", "No")),
+                   IATA_Volume2019 = 
+                     ifelse(IATA_Volume2019==0,
+                            1,IATA_Volume2019)),
+          las = 1,
+          xlab = "Known to Have Imported XDR Typhoid",
+          ylab = "Air Passengers from Pakistan (2019)",
+          col = COLS,
+          ylim = c(-0.2,7.75),
+          add = T,
+          at = c(90,120),
+          axes = F,
+          boxwex = 10)
+
+  axis(side = 1,
+       at = c(90,120),
+       labels = c("Yes","No"),
+       font = 2)
+
+   mtext("Known to Have\nImported XDR Typhoid?",
+         at = 105,
+         side = 1,
+         line = 3,
+         cex = 0.8,
+         font = 2)
+
+par(mar = c(0,0,0,0))
+
+map('world',
+    fill=T,
+    col = "grey",#COLS[2],
+    add = F,
+    ylim = c(-55,100)
+    #xlim = c(-185,180)
+    )
+
+map('world',
+    regions="Pakistan",
+    fill=T,
+    col = "darkgreen",
+    add=T)
+
+   mtext("B:",
+         side = 2,
+         las =1,
+         at = 80,
+         font = 2,
+         cex = 1.8)
+
+ regions.w.imported.XDR =
+   countries.w.imported.XDR
+
+ regions.w.imported.XDR[which(regions.w.imported.XDR=="United Kingdom")] = "UK"
+
+ regions.w.imported.XDR[which(regions.w.imported.XDR=="United States")] = "US"
+ 
+ HighIncomeRegions =  HighIncomeCountries
+ HighIncomeRegions[which(HighIncomeCountries == "Czechia")] = "Czech Republic"
+ 
+ HighIncomeRegions = c(HighIncomeRegions, 
+                       "Antigua", "Barbuda", 
+                       "Trinidad", "Tobago")
+
+
+   map("world", 
+       regions = HighIncomeRegions[which(HighIncomeRegions %in% map_data("world")$region)],
+       fill=T, 
+       col = COLS[2], 
+       add = T)
+
+ 
+
+   map("world", regions = regions.w.imported.XDR,
+       fill=T, col = COLS[1], add = T)
+   
+
+  legend(#"bottom",
+         x = -26, y = 105,
+         title = "Known to Have Imported XDR Typhoid?",
+         legend = c("Yes (HIC)", "No (HIC)",
+                    "Pakistan", "Other LMIC"),
+         fill = c(COLS, "Darkgreen","grey"),
+         horiz = T,
+         bty = "n",
+         xjust = 0)
+```
+
+# Year-to-Year Variation in Air Travel Volume
+
+```{r}
+
+Year = unique(PakistanToWorld_2010_2019_Annual$year)
+Year = Year[-length(Year)]
+cor_pearson = c()
+cor_spearman.rank = c()
+total.outgoing.travelers = c()
+
+for(i in Year)
+  {
+  df =
+    PakistanToWorld_2010_2019_Annual_Wide %>%
+    select(paste0("IATA_Volume",i),
+           "IATA_Volume2019")
+  
+  cor_pearson = c(cor_pearson, 
+                  cor(df[,1],df[,2])[1])
+  
+  cor_spearman.rank = c(cor_spearman.rank,
+                        cor(df[,1],df[,2],
+                            method = "spearman")[1])
+  
+  total.outgoing.travelers = 
+    c(total.outgoing.travelers,
+       sum(filter(PakistanToWorld_2010_2019_Annual,
+              year==i)$IATA_Volume))
+}
+
+cor_pearson = c(cor_pearson,1)
+cor_spearman.rank = c(cor_spearman.rank,1)
+Year = c(Year, 2019)
+total.outgoing.travelers = 
+    c(total.outgoing.travelers,
+       sum(filter(PakistanToWorld_2010_2019_Annual,
+              year==2019)$IATA_Volume))
+
+plot(Year, cor_pearson, 
+     type = "b", col = "orange", 
+     ylim = c(0,1), las = 1,
+     ylab = "Correlation: Year vs 2019",
+     pch = 16,
+     yaxt = "n",
+     xaxt = "n",
+     main = ""
+      # "Correlation Between Air Travel Volume\nfrom Pakistan in 2019 and Year X",
+     )
+
+lines(Year, cor_spearman.rank, type="b", col = "darkgreen",pch = 16)
+
+#abline(h = 0.9,lty = 2)
+
+axis(side = 2, at = seq(0,1,0.1),las = 1)
+axis(side = 1, at = 2010:2019, las = 1)
+
+legend("bottomright", 
+       legend = c("Pearson",
+                  "Spearman (rank-order)"),
+       title="Type of Correlation",
+       fill = c("orange", "darkgreen"))
+
+plot(Year, 
+     total.outgoing.travelers,
+     type = "b",
+     ylab = "International Air Travel Volume from Pakistan",
+     xlab = "Year",
+     las = 1,
+     ylim = c(0, 8e6))
+
+```
+# Travel Flow from Pakistan
+
+```{r}
+
+  d$Median.Inc.Group = 
+  factor(d$Median.Inc.Group, levels = names(pal))
+
+  d$Median.Inc.Fill = 
+    ifelse(d$Country.Destination %in% 
+             c("Saudi Arabia",
+               "United Arab Emirates"),
+           d$Country.Destination,
+           as.character(d$Median.Inc.Group))
+  
+  d$Median.Inc.Fill = 
+    factor(d$Median.Inc.Fill, 
+           levels=c("None",
+                    "United Arab Emirates",
+                    "Saudi Arabia",
+                    "Low",
+                    "Medium",
+                    "High",
+                    "Very High"
+                    ))
+
+p.burden = 
+ggplot(data = d,
+       aes(x = Median.Inc.Group,
+           y = IATA_Volume2019)) + 
+  geom_col(aes(fill = Median.Inc.Fill)) +
+  
+  
+  geom_col(data = d %>% 
+ filter(Country.Destination == "Saudi Arabia"),
+           aes(x = Median.Inc.Group,
+           y= IATA_Volume2019), 
+           color = grey(0.65),
+           fill = grey(1,alpha=0)) +
+
+  geom_col(data = d %>%
+   filter(Country.Destination %in% c("Saudi Arabia", "UAE",
+        "United Arab Emirates")) %>%
+  group_by(Median.Inc.Group) %>%
+  summarize(IATA_Volume2019 =                 sum(IATA_Volume2019)),
+        aes(x = Median.Inc.Group,
+        y= IATA_Volume2019),
+        color = grey(0.65),
+        fill = grey(1,alpha=0)) +
+  
+    geom_col(data = d %>%
+             group_by(Median.Inc.Group) %>%
+    summarize(IATA_Volume2019 = sum(IATA_Volume2019)) %>%
+    ungroup(),
+    aes(x = Median.Inc.Group,
+    y= IATA_Volume2019),
+    color = "black",
+    fill = grey(1,alpha=0)) +
+  
+  scale_fill_manual(values = 
+                      c("United Arab Emirates"=grey(0.35),
+                        "Saudi Arabia"=grey(0.25),
+                        "None" = grey(0.5),
+                               pal[2:5])) + 
+  #scale_fill_manual(values = pal) + 
+  scale_y_continuous(breaks = seq(0,7e6,1e6), 
+                     labels = 0:7,
+                     limits = c(0,7e6)) +
+  scale_x_discrete(labels = 
+                     paste0(names(pal),
+                            "\n (n=",
+                            table(d$Median.Inc.Group),")"),
+                   ) +
+  labs(x = "Typhoid Burden (# of Countries)",
+       y = "Air Travelers from Pakistan, Millions (2019)") + 
+  theme(legend.position = "none",
+        panel.grid.minor = element_line(size = 0),
+        panel.grid.major.x = element_line(size = 0),
+        #panel.grid.major.y = element_line(size = 0),
+        panel.grid = element_line(colour="grey"),
+        panel.background = element_rect(fill = "white"),
+        axis.text = element_text(size = 10,color="black"),
+        axis.title = element_text(size = 12,color="black")
+     ) + 
+   geom_text(data = d %>% 
+          group_by(Median.Inc.Group) %>% 
+          summarize(IATA_Volume2019 =
+                     sum(IATA_Volume2019)
+                   ) %>% 
+          ungroup(),
+     aes(x = Median.Inc.Group,
+         y = IATA_Volume2019,
+         label = paste0(round(100*IATA_Volume2019/
+                                sum(IATA_Volume2019),
+                ifelse(IATA_Volume2019/sum(IATA_Volume2019) < 0.01,1,0)),
+                        "%"),
+                 vjust = -0.3)) + 
+  geom_text(x = 1, 
+            y = 1318403,#3.68e6, 
+            label = "Saudi\nArabia\n(34%)",
+            col = grey(0.9)) + 
+    geom_text(x = 1, 
+              y = 3473235,#5.836e6, 
+              label = "UAE\n(22%)",
+              col = grey(0.9)) + 
+  ggtitle("B") + 
+  theme(plot.title = element_text(face="bold",size = 16))
+
+```
+
+```{r}
+
+ d$Income.Group.Fill = 
+    ifelse(d$Country.Destination %in% 
+             c("Saudi Arabia",
+               "United Arab Emirates"),
+           d$Country.Destination,
+           as.character(d$Income.group))
+  
+  d$Income.Group.Fill = 
+    factor(d$Income.Group.Fill, 
+           levels=c("High income",
+                    "United Arab Emirates",
+                    "Saudi Arabia",
+                    "Upper middle income",
+                                    "Lower middle income",
+                                    "Low income"
+                    ))
+
+p.income = 
+  ggplot(data = d %>% 
+         mutate(Income.group = 
+                  factor(Income.group,
+                         levels = c("High income",
+                                    "Upper middle income",
+                                    "Lower middle income",
+                                    "Low income"))
+                ),
+       aes(x = Income.group,
+           y = IATA_Volume2019)) + 
+  #geom_col(aes(fill = Income.group)) + 
+  geom_col(aes(fill = Income.Group.Fill)) +
+  
+  geom_col(data = d %>% 
+ filter(Country.Destination == "Saudi Arabia"),
+           aes(x = Income.group,
+           y= IATA_Volume2019), 
+           color = grey(0.65),
+           fill = grey(1,alpha=0)) +
+
+  geom_col(data = d %>%
+   filter(Country.Destination %in% c("Saudi Arabia", "UAE",
+        "United Arab Emirates")) %>%
+  group_by(Income.group) %>%
+  summarize(IATA_Volume2019 =                 sum(IATA_Volume2019)),
+        aes(x = Income.group,
+        y= IATA_Volume2019),
+        color = grey(0.65),
+        fill = grey(1,alpha=0)) +
+  
+    geom_col(data = d %>%
+             group_by(Income.group) %>%
+    summarize(IATA_Volume2019 = sum(IATA_Volume2019)) %>%
+    ungroup(),
+    aes(x = Income.group,
+    y= IATA_Volume2019),
+    color = "black",
+    fill = grey(1,alpha=0)) +
+  
+  scale_fill_manual(values = c(rgb(27,158+40,119,
+                                   maxColorValue = 255),
+                               rgb(27,158+20,119,
+                                   maxColorValue = 255),
+                               brewer.pal(4,"Dark2")),
+                    breaks = c("High income",
+                               "United Arab Emirates",
+                               "Saudi Arabia",
+                               "Upper middle income",
+                               "Lower middle income",
+                               "Low income")) + 
+    # scale_fill_manual(values = brewer.pal(4,"Dark2"),
+  #                   breaks = c("High income",
+  #                                   "Upper middle income",
+  #                                   "Lower middle income",
+  #                                   "Low income")) + 
+  scale_y_continuous(breaks = seq(0,7e6,1e6), 
+                     labels = 0:7,
+                     limits = c(0,7e6)) +
+  scale_x_discrete(labels =
+                     paste0( c("High",
+                                    "Upper-Middle",
+                                    "Lower-Middle",
+                                    "Low"),
+                            "\n (n=",
+                            table(d$Income.group)[c("High income",
+                                    "Upper middle income",
+                                    "Lower middle income",
+                                    "Low income")],")"),
+                   ) +
+  labs(x = "Income Group (# of Countries)",
+       y = "Air Travelers from Pakistan, Millions (2019)") + 
+  theme(legend.position = "none",
+        panel.grid.minor = element_line(size = 0),
+        panel.grid.major.x = element_line(size = 0),
+        #panel.grid.major.y = element_line(size = 0),
+        panel.grid = element_line(colour="grey"),
+        panel.background = element_rect(fill = "white"),
+        axis.text = element_text(size = 10,color="black"),
+        axis.title = element_text(size = 12,color="black")
+     ) + 
+   geom_text(data = d %>% 
+          group_by(Income.group) %>% 
+          summarize(IATA_Volume2019 =
+                     sum(IATA_Volume2019)
+                   ) %>% 
+          ungroup(),
+     aes(x = Income.group,
+         y = IATA_Volume2019,
+         label = paste0(round(100*IATA_Volume2019/
+                                sum(IATA_Volume2019),
+               ifelse(IATA_Volume2019/sum(IATA_Volume2019) < 0.01,1,0)),
+                        "%"),
+                 vjust = -0.2)) + 
+    geom_text(x = 1, 
+            y = 1318403,#3.68e6, 
+            label = "Saudi\nArabia\n(34%)",
+            col = "black") + 
+    geom_text(x = 1, 
+              y = 3473235,#5.836e6, 
+              label = "UAE\n(22%)",
+              col = "black") + 
+  ggtitle("C") + 
+  theme(plot.title = element_text(face="bold",size = 16))
+
+# d %>% 
+#          left_join(WorldBank, 
+#                    by = "Country.Destination") %>% 
+#           group_by(Income.group) %>% 
+#           summarize(n = n(),
+#                     IATA_Volume2019 =
+#                      sum(IATA_Volume2019)
+#                    ) %>% 
+#           ungroup()
+# 
+# d %>% 
+#           group_by(Median.Inc.Group) %>% 
+#           summarize(n=n(),
+#                     IATA_Volume2019 =
+#                      sum(IATA_Volume2019)
+#                    ) %>% 
+#           ungroup()
+
+# d %>% 
+#          left_join(WorldBank, 
+#                    by = "Country.Destination") %>%  
+#   filter(Median.Inc.Group == "None") %>% 
+#   select(Income.group) %>%
+#   unlist() %>%
+#   table()
+# 
+# d %>% 
+#          left_join(WorldBank, 
+#                    by = "Country.Destination") %>%  
+#   filter(Income.group == "High income") %>% 
+#   select(Median.Inc.Group) %>%
+#   unlist() %>%
+#   table()
+
+# Croatia is High Income but has a low typhoid burden, not none
+
+# d %>% 
+#   left_join(WorldBank, 
+#              by = "Country.Destination") %>% 
+#   filter(Median.Inc.Group == "Low",
+#          Income.group == "High income")
+
+# Dominica, marshall islands, cook islands, and tuvalu have no typhoid burden, but are upper middle income, not high income
+
+# d %>% 
+#   left_join(WorldBank, 
+#              by = "Country.Destination") %>% 
+#   filter(Median.Inc.Group == "None",
+#          Income.group == "Upper middle income")
+
+```
+
+```{r}
+
+ d$Region.Fill = 
+    ifelse(d$Country.Destination %in% 
+             c("Saudi Arabia",
+               "United Arab Emirates"),
+           d$Country.Destination,
+           as.character(d$Region))
+  
+  d$Region.Fill = 
+    factor(d$Region.Fill, 
+           levels=c(levels(d$Region),
+                    "United Arab Emirates",
+                    "Saudi Arabia"
+                    ))
+
+
+  region.x.label = 
+    replace(as.character(unique(d$Region)), 7, "Latin America\n& Caribbean")
+  
+p.region =
+  ggplot(data = d,
+       aes(x = Region,
+           y = IATA_Volume2019)) + 
+  geom_col(aes(fill = Region.Fill)) +
+
+geom_col(data = d %>% 
+ filter(Country.Destination == "Saudi Arabia"),
+           aes(x = Region,
+           y= IATA_Volume2019), 
+           color = grey(0.75),
+           fill = grey(1,alpha=0)) +
+  geom_col(data = d %>% 
+   filter(Country.Destination %in% c("Saudi Arabia", "UAE",
+        "United Arab Emirates")) %>% 
+     group_by(Region) %>%
+     summarize(IATA_Volume2019 =                 sum(IATA_Volume2019)),
+           aes(x = Region,
+           y= IATA_Volume2019), 
+           color = grey(0.75),
+           fill = grey(1,alpha=0)) +
+    geom_col(data = d %>% 
+             group_by(Region) %>%
+             summarize(IATA_Volume2019 = sum(IATA_Volume2019)) %>% 
+             ungroup(),
+           aes(x = Region,
+           y= IATA_Volume2019), 
+           color = "black",
+           fill = grey(1,alpha=0)) +
+  
+  scale_fill_manual(values = c(rgb(102-20,194+20,165-70,maxColorValue = 255),
+                               rgb(102-10,194+10,165-35,maxColorValue = 255),
+                               brewer.pal(7,"Set2")),
+                     breaks = c("Saudi Arabia",
+                                "United Arab Emirates",
+                                unique(as.character(d$Region)))) +
+  scale_y_continuous(breaks = seq(0,6e6,1e6),
+                     labels = 0:6,
+                     limits = c(0,5.25e6)) +
+  scale_x_discrete(labels =
+                     paste0( sort(region.x.label),
+                            "\n (n=",
+                            table(sort(d$Region)),")")
+                   ) +
+  labs(x = "Region (# of Countries)",
+       y = "Air Travelers from Pakistan, Millions (2019)") +
+  theme(legend.position = "none",
+        panel.grid.minor = element_line(size = 0),
+        panel.grid.major.x = element_line(size = 0),
+        #panel.grid.major.y = element_line(size = 0),
+        panel.grid = element_line(colour="grey"),
+        panel.background = element_rect(fill = "white"),
+        axis.text = element_text(size = 10,color="black"),
+        # axis.text.x = element_text(angle = 35,hjust = 0.8),
+        axis.text.x = element_text(angle = 0,hjust = 0.5),
+        axis.title = element_text(size = 12,color="black")
+     ) +
+  geom_text(data = d %>%
+         group_by(Region) %>%
+         summarize(IATA_Volume2019 =
+                    sum(IATA_Volume2019)
+                  ) %>%
+         ungroup(),
+    aes(x = Region,
+        y = IATA_Volume2019,
+        label = paste0(ifelse(IATA_Volume2019/sum(IATA_Volume2019) < 0.001,"<0.1",
+                              round(100*IATA_Volume2019/
+                               sum(IATA_Volume2019),
+                             ifelse(IATA_Volume2019/sum(IATA_Volume2019) < 0.007, 1,0))),
+                       "%"),
+                vjust = -0.2)) + 
+      geom_text(x = 4, 
+            y = 1318403,#3.68e6, 
+            label = "Saudi\nArabia\n(34%)",
+            col = "black") + 
+    geom_text(x = 4, 
+              y = 3473235,#5.836e6, 
+              label = "UAE\n(22%)",
+              col = "black") + 
+  ggtitle("A") +
+  theme(plot.title = element_text(face="bold",size = 16))
+```
+
+```{r,fig.height=15, fig.width = 11}
+grid.arrange(grobs = 
+               list(p.region,
+                    p.burden,
+                    p.income),
+             widths = c(1,1),
+             layout_matrix = 
+               matrix(c(1,1,2,3),
+                      byrow = T,
+             ncol=2,nrow=2))
+```
